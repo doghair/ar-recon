@@ -17,6 +17,19 @@ async function request(path, params) {
   return res.json()
 }
 
+async function patch(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`${res.status} ${res.statusText}: ${text}`)
+  }
+  return res.json()
+}
+
 async function post(path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -59,6 +72,11 @@ export const api = {
   // Match engine
   matchSuggestions:   (receiptId) => request(`/api/match/suggest/${encodeURIComponent(receiptId)}`),
   applyMatch:         (receiptId, invoiceId) => post('/api/match/apply', { receipt_id: receiptId, invoice_id: invoiceId }),
+
+  // Inline edits
+  updateInvoice:   (id, data) => patch(`/api/invoices/${encodeURIComponent(id)}`, data),
+  updateReceipt:   (id, data) => patch(`/api/receipts/${encodeURIComponent(id)}`, data),
+  updateCustomer:  (id, data) => patch(`/api/customers/${encodeURIComponent(id)}`, data),
 
   // Reconciliation items (manual resolution)
   reconItems:         (params)   => request('/api/reconciliation/items', params),

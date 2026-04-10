@@ -35,6 +35,7 @@ export default function Layout({ children }) {
 
           <div className="sidebar-divider" />
           <NavLink to="/compliance"      className={link}               onClick={close}>SEC Compliance</NavLink>
+          <NavLink to="/upload"          className={link}               onClick={close}>Upload Data</NavLink>
         </nav>
       </aside>
       <main className="main">{children}</main>

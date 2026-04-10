@@ -1,28 +1,40 @@
 """
-AR Reconciliation API — FastAPI backend.
-
-Run:
-    python backend/main.py
-or:
-    uvicorn backend.main:app --reload --port 8000
+AR Reconciliation API — FastAPI backend (Supabase).
+Uses supabase-py (PostgREST + RPC) — no direct DB password required.
 """
+import io
 import os
-import sqlite3
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from supabase import create_client, Client
 
-DB_PATH = Path(os.environ.get("AR_DB_PATH") or str(Path(__file__).resolve().parent.parent / "db" / "arrecon.db"))
+# ── Supabase client ───────────────────────────────────────────────────────────
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
-app = FastAPI(title="AR Reconciliation API", version="0.2.0")
+_client: Optional[Client] = None
 
-# Permissive CORS for local dev — frontend may live on a dynamic port
+def sb() -> Client:
+    global _client
+    if _client is None:
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _client
+
+
+def tbl(name: str):
+    return sb().table(name)
+
+
+def rpc(fn: str, params: dict = {}):
+    return sb().rpc(fn, params).execute().data
+
+
+app = FastAPI(title="AR Reconciliation API", version="0.3.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=".*",
@@ -32,458 +44,231 @@ app.add_middleware(
 )
 
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def query_all(sql: str, params: tuple = ()) -> list[dict]:
-    conn = get_conn()
-    try:
-        cur = conn.execute(sql, params)
-        return [dict(row) for row in cur.fetchall()]
-    finally:
-        conn.close()
-
-
-def query_one(sql: str, params: tuple = ()) -> Optional[dict]:
-    conn = get_conn()
-    try:
-        cur = conn.execute(sql, params)
-        row = cur.fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def execute(sql: str, params: tuple = ()):
-    conn = get_conn()
-    try:
-        conn.execute(sql, params)
-        conn.commit()
-    finally:
-        conn.close()
-
-
-# ── health ──────────────────────────────────────────────────────────────────
+# ── health ────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "db": str(DB_PATH), "db_exists": DB_PATH.exists()}
+    result = tbl("customers").select("customer_id", count="exact").limit(0).execute()
+    return {"status": "ok", "db": "supabase", "customer_count": result.count}
 
 
-# ── dashboard ───────────────────────────────────────────────────────────────
+# ── dashboard ─────────────────────────────────────────────────────────────────
 @app.get("/api/dashboard")
 def dashboard():
-    current = query_one("SELECT * FROM v_reconciliation_current")
-    exception_counts = query_all("""
-        SELECT category,
-               COUNT(*) AS count,
-               ROUND(SUM(amount), 2) AS total
-        FROM v_all_exceptions
-        GROUP BY category
-        ORDER BY category
-    """)
-    aging = query_all("""
-        SELECT aging_bucket,
-               COUNT(*) AS count,
-               ROUND(SUM(open_balance), 2) AS total
-        FROM v_ar_aging
-        GROUP BY aging_bucket
-        ORDER BY CASE aging_bucket
-            WHEN 'Current' THEN 1
-            WHEN '1-30'   THEN 2
-            WHEN '31-60'  THEN 3
-            WHEN '61-90'  THEN 4
-            WHEN '91-120' THEN 5
-            ELSE 6
-        END
-    """)
-    period_summary = query_all("SELECT * FROM v_reconciliation_summary")
-    top_customers = query_all(
-        "SELECT * FROM v_subledger_open_by_customer LIMIT 10"
-    )
+    current          = tbl("v_reconciliation_current").select("*").execute().data
+    exception_counts = tbl("v_all_exceptions").select("category,amount").execute().data
+    aging            = tbl("v_ar_aging").select("aging_bucket,open_balance").execute().data
+    period_summary   = tbl("v_reconciliation_summary").select("*").execute().data
+    top_customers    = tbl("v_subledger_open_by_customer").select("*").limit(10).execute().data
+
+    # Aggregate exception counts
+    from collections import defaultdict
+    exc_agg = defaultdict(lambda: {"count": 0, "total": 0.0})
+    for r in exception_counts:
+        exc_agg[r["category"]]["count"] += 1
+        exc_agg[r["category"]]["total"] = round(exc_agg[r["category"]]["total"] + (r["amount"] or 0), 2)
+    exc_list = sorted([{"category": k, "count": v["count"], "total": v["total"]}
+                       for k, v in exc_agg.items()], key=lambda x: x["category"])
+
+    # Aggregate aging
+    bucket_order = {"Current": 1, "1-30": 2, "31-60": 3, "61-90": 4, "91-120": 5, "120+": 6}
+    ag_agg = defaultdict(lambda: {"count": 0, "total": 0.0})
+    for r in aging:
+        b = r["aging_bucket"]
+        ag_agg[b]["count"] += 1
+        ag_agg[b]["total"] = round(ag_agg[b]["total"] + (r["open_balance"] or 0), 2)
+    ag_list = sorted([{"aging_bucket": k, "count": v["count"], "total": v["total"]}
+                      for k, v in ag_agg.items()], key=lambda x: bucket_order.get(x["aging_bucket"], 9))
+
     return {
-        "current": current,
-        "exception_counts": exception_counts,
-        "aging": aging,
-        "period_summary": period_summary,
-        "top_customers": top_customers,
+        "current":          current[0] if current else None,
+        "exception_counts": exc_list,
+        "aging":            ag_list,
+        "period_summary":   period_summary,
+        "top_customers":    top_customers,
     }
 
 
-# ── cash flow ───────────────────────────────────────────────────────────────
+# ── cash flow ─────────────────────────────────────────────────────────────────
 @app.get("/api/cashflow")
 def cashflow():
-    """Monthly cash flow: invoiced, collected, credit memos, write-offs, net AR change."""
-    invoiced = query_all("""
-        SELECT period,
-               ROUND(SUM(total_amount), 2) AS amount
-        FROM invoices
-        GROUP BY period
-        ORDER BY period
-    """)
-    collected = query_all("""
-        SELECT strftime('%Y-%m', receipt_date) AS period,
-               ROUND(SUM(amount), 2) AS amount
-        FROM cash_receipts
-        GROUP BY strftime('%Y-%m', receipt_date)
-        ORDER BY period
-    """)
-    credit_memos = query_all("""
-        SELECT strftime('%Y-%m', memo_date) AS period,
-               ROUND(SUM(amount), 2) AS amount
-        FROM credit_memos
-        GROUP BY strftime('%Y-%m', memo_date)
-        ORDER BY period
-    """)
-    writeoffs = query_all("""
-        SELECT period,
-               ROUND(SUM(debit), 2) AS amount
-        FROM gl_entries
-        WHERE account_code = '5500'
-          AND entry_type = 'Write-Off'
-        GROUP BY period
-        ORDER BY period
-    """)
-
-    all_periods = sorted(set(
-        [r["period"] for r in invoiced]
-        + [r["period"] for r in collected]
-        + [r["period"] for r in credit_memos]
-        + [r["period"] for r in writeoffs]
-    ))
-
-    def lookup(rows, p):
-        for r in rows:
-            if r["period"] == p:
-                return r["amount"] or 0
-        return 0
-
-    result = []
-    for p in all_periods:
-        inv = lookup(invoiced, p)
-        col = lookup(collected, p)
-        cm  = lookup(credit_memos, p)
-        wo  = lookup(writeoffs, p)
-        result.append({
-            "period":       p,
-            "invoiced":     inv,
-            "collected":    col,
-            "credit_memos": cm,
-            "writeoffs":    wo,
-            "net_ar_change": round(inv - col - cm - wo, 2),
-        })
-    return result
+    rows = rpc("get_cashflow")
+    return rows
 
 
-# ── AR balance trend (running) ──────────────────────────────────────────────
+# ── AR balance trend ──────────────────────────────────────────────────────────
 @app.get("/api/ar-trend")
 def ar_trend():
-    return query_all("""
-        SELECT period, running_balance
-        FROM v_gl_ar_running
-        ORDER BY period
-    """)
+    return tbl("v_gl_ar_running").select("period,running_balance").execute().data
 
 
 @app.get("/api/ar-trend/daily")
 def ar_trend_daily():
-    return query_all("""
-        SELECT entry_date,
-               ROUND(SUM(debit - credit) OVER (ORDER BY entry_date, entry_id
-                        ROWS UNBOUNDED PRECEDING), 2) AS running_balance
-        FROM gl_entries
-        WHERE account_code = '1200'
-        ORDER BY entry_date, entry_id
-    """)
+    return tbl("v_ar_trend_daily").select("entry_date,running_balance").execute().data
 
 
-# ── KPIs ────────────────────────────────────────────────────────────────────
+# ── KPIs ──────────────────────────────────────────────────────────────────────
 @app.get("/api/kpis")
 def kpis():
-    totals = query_one("""
-        SELECT
-            (SELECT ROUND(SUM(total_amount), 2) FROM invoices)               AS total_invoiced,
-            (SELECT ROUND(SUM(amount), 2) FROM cash_receipts)                AS total_collected,
-            (SELECT ROUND(SUM(amount), 2) FROM cash_receipts WHERE status = 'Applied') AS total_applied,
-            (SELECT ROUND(SUM(amount), 2) FROM credit_memos)                 AS total_credit_memos,
-            (SELECT ROUND(SUM(debit), 2)  FROM gl_entries
-             WHERE account_code = '5500' AND entry_type = 'Write-Off')       AS total_writeoffs,
-            (SELECT COUNT(*) FROM invoices)                                  AS invoice_count,
-            (SELECT COUNT(*) FROM invoices WHERE status IN ('Open','Short Pay - Open')) AS open_invoice_count,
-            (SELECT COUNT(*) FROM invoices WHERE status = 'Paid')            AS paid_invoice_count,
-            (SELECT COUNT(*) FROM customers)                                 AS customer_count
-    """)
-    current = query_one("SELECT * FROM v_reconciliation_current")
+    totals  = rpc("get_kpis")
+    current = tbl("v_reconciliation_current").select("*").execute().data
+    current = current[0] if current else {}
 
-    total_invoiced = totals.get("total_invoiced") or 0
+    total_invoiced  = totals.get("total_invoiced") or 0
     total_collected = totals.get("total_collected") or 0
-    open_ar = current.get("subledger_open_total") if current else 0
+    open_ar         = current.get("subledger_open_total") or 0
 
-    days_in_period = 99
-    dso = round((open_ar / total_invoiced) * days_in_period, 1) if total_invoiced else 0
+    days_in_period  = 99
+    dso             = round((open_ar / total_invoiced) * days_in_period, 1) if total_invoiced else 0
     collection_rate = round((total_collected / total_invoiced) * 100, 1) if total_invoiced else 0
-    avg_invoice = round(total_invoiced / totals["invoice_count"], 2) if totals["invoice_count"] else 0
+    inv_count       = totals.get("invoice_count") or 0
+    avg_invoice     = round(total_invoiced / inv_count, 2) if inv_count else 0
 
     return {
         **totals,
-        "gl_ar_total":       current.get("gl_ar_total") if current else 0,
-        "subledger_open":    open_ar,
-        "variance":          current.get("variance") if current else 0,
-        "dso_days":          dso,
-        "collection_rate":   collection_rate,
-        "avg_invoice_size":  avg_invoice,
+        "gl_ar_total":      current.get("gl_ar_total") or 0,
+        "subledger_open":   open_ar,
+        "variance":         current.get("variance") or 0,
+        "dso_days":         dso,
+        "collection_rate":  collection_rate,
+        "avg_invoice_size": avg_invoice,
     }
 
 
-# ── reconciliation ──────────────────────────────────────────────────────────
+# ── reconciliation ────────────────────────────────────────────────────────────
 @app.get("/api/reconciliation/current")
 def recon_current():
-    return query_one("SELECT * FROM v_reconciliation_current")
+    data = tbl("v_reconciliation_current").select("*").execute().data
+    return data[0] if data else None
 
 
 @app.get("/api/reconciliation/by-period")
 def recon_by_period():
-    return query_all("SELECT * FROM v_reconciliation_summary")
+    return tbl("v_reconciliation_summary").select("*").execute().data
 
 
-# ── exceptions ──────────────────────────────────────────────────────────────
-EXCEPTION_VIEWS = {
-    "Missing GL":          "v_exceptions_missing_gl",
-    "Duplicate GL":        "v_exceptions_duplicate_gl",
-    "Unapplied Cash":      "v_exceptions_unapplied_cash",
-    "Unapplied Credit":    "v_exceptions_unapplied_credits",
-    "Short Pay":           "v_exceptions_short_pays",
-    "Timing Diff":         "v_exceptions_timing_diffs",
-    "Write-Off Mismatch":  "v_exceptions_writeoff_mismatch",
+# ── exceptions ────────────────────────────────────────────────────────────────
+VIEW_MAP = {
+    "Missing GL":         "v_exceptions_missing_gl",
+    "Duplicate GL":       "v_exceptions_duplicate_gl",
+    "Unapplied Cash":     "v_exceptions_unapplied_cash",
+    "Unapplied Credit":   "v_exceptions_unapplied_credits",
+    "Short Pay":          "v_exceptions_short_pays",
+    "Timing Diff":        "v_exceptions_timing_diffs",
+    "Write-Off Mismatch": "v_exceptions_writeoff_mismatch",
 }
 
 
 @app.get("/api/exceptions")
 def exceptions(category: Optional[str] = None):
+    q = tbl("v_all_exceptions").select("*")
     if category:
-        return query_all(
-            "SELECT * FROM v_all_exceptions WHERE category = ? ORDER BY amount DESC",
-            (category,))
-    return query_all("SELECT * FROM v_all_exceptions ORDER BY category, amount DESC")
+        q = q.eq("category", category)
+    return q.order("category").execute().data
 
 
 @app.get("/api/exceptions/detail")
 def exception_detail(category: str = Query(...)):
-    view = EXCEPTION_VIEWS.get(category)
+    view = VIEW_MAP.get(category)
     if not view:
         raise HTTPException(404, f"Unknown category '{category}'")
-    return query_all(f"SELECT * FROM {view}")
+    return tbl(view).select("*").execute().data
 
 
-# ── reconciliation items (manual resolve) ───────────────────────────────────
+# ── reconciliation items ──────────────────────────────────────────────────────
 class ResolveRequest(BaseModel):
     category: str
     entity_id: str
     customer_id: Optional[str] = None
     amount: Optional[float] = None
     resolution_notes: str = ""
-    status: str = "Resolved"  # Resolved | Written Off | In Review
+    status: str = "Resolved"
 
 
 @app.get("/api/reconciliation/items")
 def recon_items(category: Optional[str] = None, status: Optional[str] = None):
-    clauses, params = [], []
-    if category:
-        clauses.append("category = ?"); params.append(category)
-    if status:
-        clauses.append("status = ?"); params.append(status)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return query_all(
-        f"SELECT * FROM reconciliation_items {where} ORDER BY created_at DESC",
-        tuple(params))
+    q = tbl("reconciliation_items").select("*")
+    if category: q = q.eq("category", category)
+    if status:   q = q.eq("status", status)
+    return q.order("created_at", desc=True).execute().data
 
 
 @app.post("/api/reconciliation/items/resolve")
 def resolve_exception(req: ResolveRequest):
-    # Check if already resolved
-    existing = query_one(
-        "SELECT item_id FROM reconciliation_items WHERE category = ? AND entity_id = ? AND status IN ('Resolved','Written Off')",
-        (req.category, req.entity_id))
+    existing = tbl("reconciliation_items").select("item_id")\
+        .eq("category", req.category).eq("entity_id", req.entity_id)\
+        .in_("status", ["Resolved", "Written Off"]).execute().data
     if existing:
-        return {"ok": True, "message": "Already resolved", "item_id": existing["item_id"]}
+        return {"ok": True, "message": "Already resolved", "item_id": existing[0]["item_id"]}
 
-    # Determine period from entity
-    period = "2026-01"
-    conn = get_conn()
-    try:
-        # Try to find the period from the entity
-        row = conn.execute("SELECT period FROM invoices WHERE invoice_id = ?", (req.entity_id,)).fetchone()
-        if row:
-            period = row["period"]
-        else:
-            row = conn.execute("SELECT strftime('%Y-%m', receipt_date) as period FROM cash_receipts WHERE receipt_id = ?", (req.entity_id,)).fetchone()
-            if row:
-                period = row["period"]
+    # Determine period
+    inv = tbl("invoices").select("period").eq("invoice_id", req.entity_id).execute().data
+    period = inv[0]["period"] if inv else "2026-01"
 
-        # Ensure the period row exists
-        conn.execute("""
-            INSERT OR IGNORE INTO reconciliation_periods (period, status)
-            VALUES (?, 'Open')
-        """, (period,))
-
-        conn.execute("""
-            INSERT INTO reconciliation_items
-                (period, category, entity_type, entity_id, customer_id, amount, description, status, resolution_notes, resolved_at)
-            VALUES (?, ?, 'auto', ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            period,
-            req.category,
-            req.entity_id,
-            req.customer_id,
-            req.amount,
-            f"Resolved: {req.category}",
-            req.status,
-            req.resolution_notes,
-            datetime.utcnow().isoformat(),
-        ))
-        conn.commit()
-    finally:
-        conn.close()
+    # Ensure period row exists
+    tbl("reconciliation_periods").upsert({"period": period, "status": "Open"},
+                                          on_conflict="period").execute()
+    tbl("reconciliation_items").insert({
+        "period": period, "category": req.category,
+        "entity_type": "auto", "entity_id": req.entity_id,
+        "customer_id": req.customer_id, "amount": req.amount,
+        "description": f"Resolved: {req.category}", "status": req.status,
+        "resolution_notes": req.resolution_notes,
+        "resolved_at": datetime.utcnow().isoformat(),
+    }).execute()
     return {"ok": True, "message": f"Exception marked as {req.status}"}
 
 
-# ── period lock workflow ────────────────────────────────────────────────────
+# ── period lock ───────────────────────────────────────────────────────────────
 @app.get("/api/periods")
 def list_periods():
-    # Ensure periods exist for all months in the data
-    conn = get_conn()
-    try:
-        conn.execute("""
-            INSERT OR IGNORE INTO reconciliation_periods (period, status)
-            SELECT DISTINCT period, 'Open' FROM invoices
-        """)
-        conn.commit()
-    finally:
-        conn.close()
+    inv_periods = tbl("invoices").select("period").execute().data
+    for row in inv_periods:
+        tbl("reconciliation_periods").upsert(
+            {"period": row["period"], "status": "Open"},
+            on_conflict="period").execute()
 
-    # Enrich with computed balances
-    periods = query_all("SELECT * FROM reconciliation_periods ORDER BY period")
-    gl_balances = {r["period"]: r for r in query_all("SELECT * FROM v_gl_ar_balance_by_period")}
-    sub_balances = {r["period"]: r for r in query_all("SELECT * FROM v_subledger_balance_by_period")}
-
+    periods     = tbl("reconciliation_periods").select("*").order("period").execute().data
+    gl_balances  = {r["period"]: r for r in tbl("v_gl_ar_balance_by_period").select("*").execute().data}
+    sub_balances = {r["period"]: r for r in tbl("v_subledger_balance_by_period").select("*").execute().data}
     result = []
     for p in periods:
-        gl = gl_balances.get(p["period"], {})
+        gl  = gl_balances.get(p["period"], {})
         sub = sub_balances.get(p["period"], {})
-        gl_net = gl.get("net_movement", 0) or 0
-        sub_net = sub.get("subledger_net", 0) or 0
         result.append({
             **p,
-            "gl_balance": gl_net,
-            "subledger_balance": sub_net,
-            "variance": round(gl_net - sub_net, 2),
+            "gl_balance":        gl.get("net_movement") or 0,
+            "subledger_balance": sub.get("subledger_net") or 0,
+            "variance":          round((gl.get("net_movement") or 0) - (sub.get("subledger_net") or 0), 2),
         })
     return result
 
 
 @app.post("/api/periods/{period}/lock")
 def lock_period(period: str):
-    existing = query_one("SELECT * FROM reconciliation_periods WHERE period = ?", (period,))
-    if not existing:
-        execute(
-            "INSERT INTO reconciliation_periods (period, status) VALUES (?, 'Open')",
-            (period,))
-    execute("""
-        UPDATE reconciliation_periods
-        SET status = 'Locked',
-            reconciled_by = 'system',
-            reconciled_at = ?,
-            locked_at = ?
-        WHERE period = ?
-    """, (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), period))
+    tbl("reconciliation_periods").upsert({"period": period, "status": "Open"},
+                                          on_conflict="period").execute()
+    now = datetime.utcnow().isoformat()
+    tbl("reconciliation_periods").update({
+        "status": "Locked", "reconciled_by": "system",
+        "reconciled_at": now, "locked_at": now,
+    }).eq("period", period).execute()
     return {"ok": True, "message": f"Period {period} locked"}
 
 
 @app.post("/api/periods/{period}/unlock")
 def unlock_period(period: str):
-    execute("""
-        UPDATE reconciliation_periods
-        SET status = 'Open',
-            locked_at = NULL
-        WHERE period = ?
-    """, (period,))
+    tbl("reconciliation_periods").update({"status": "Open", "locked_at": None})\
+        .eq("period", period).execute()
     return {"ok": True, "message": f"Period {period} unlocked"}
 
 
-# ── match engine ────────────────────────────────────────────────────────────
+# ── match engine ──────────────────────────────────────────────────────────────
 @app.get("/api/match/suggest/{receipt_id}")
 def match_suggest(receipt_id: str):
-    """Suggest open invoices that could match an unapplied cash receipt."""
-    receipt = query_one(
-        "SELECT * FROM cash_receipts WHERE receipt_id = ?",
-        (receipt_id,))
-    if not receipt:
+    result = rpc("get_match_suggestions", {"p_receipt_id": receipt_id})
+    if not result:
         raise HTTPException(404, f"Receipt '{receipt_id}' not found")
-
-    amt = receipt["amount"]
-    cust = receipt["customer_id"]
-    tolerance = 0.02  # 2% tolerance
-
-    # Find open invoices for this customer within tolerance
-    candidates = query_all("""
-        SELECT
-            i.invoice_id,
-            i.customer_id,
-            c.customer_name,
-            i.invoice_date,
-            i.due_date,
-            i.total_amount,
-            i.status,
-            ABS(i.total_amount - ?) AS amount_diff,
-            CASE
-                WHEN ABS(i.total_amount - ?) < 0.01 THEN 100
-                WHEN ABS(i.total_amount - ?) / i.total_amount <= 0.005 THEN 95
-                WHEN ABS(i.total_amount - ?) / i.total_amount <= 0.02  THEN 80
-                WHEN ABS(i.total_amount - ?) / i.total_amount <= 0.05  THEN 60
-                ELSE 40
-            END AS confidence
-        FROM invoices i
-        JOIN customers c ON c.customer_id = i.customer_id
-        WHERE i.status IN ('Open', 'Short Pay - Open')
-          AND i.customer_id = ?
-          AND ABS(i.total_amount - ?) / i.total_amount <= ?
-        ORDER BY confidence DESC, amount_diff ASC
-        LIMIT 10
-    """, (amt, amt, amt, amt, amt, cust, amt, tolerance))
-
-    # Also check cross-customer matches (lower confidence)
-    cross = query_all("""
-        SELECT
-            i.invoice_id,
-            i.customer_id,
-            c.customer_name,
-            i.invoice_date,
-            i.due_date,
-            i.total_amount,
-            i.status,
-            ABS(i.total_amount - ?) AS amount_diff,
-            CASE
-                WHEN ABS(i.total_amount - ?) < 0.01 THEN 70
-                WHEN ABS(i.total_amount - ?) / i.total_amount <= 0.005 THEN 60
-                ELSE 30
-            END AS confidence
-        FROM invoices i
-        JOIN customers c ON c.customer_id = i.customer_id
-        WHERE i.status IN ('Open', 'Short Pay - Open')
-          AND i.customer_id != ?
-          AND ABS(i.total_amount - ?) < 0.01
-        ORDER BY amount_diff ASC
-        LIMIT 5
-    """, (amt, amt, amt, cust, amt))
-
-    return {
-        "receipt": receipt,
-        "same_customer": candidates,
-        "cross_customer": cross,
-    }
+    return result
 
 
 class MatchApplyRequest(BaseModel):
@@ -493,183 +278,234 @@ class MatchApplyRequest(BaseModel):
 
 @app.post("/api/match/apply")
 def match_apply(req: MatchApplyRequest):
-    """Apply an unapplied receipt to an invoice."""
-    receipt = query_one("SELECT * FROM cash_receipts WHERE receipt_id = ?", (req.receipt_id,))
+    receipt = tbl("cash_receipts").select("*").eq("receipt_id", req.receipt_id).execute().data
     if not receipt:
         raise HTTPException(404, "Receipt not found")
-    invoice = query_one("SELECT * FROM invoices WHERE invoice_id = ?", (req.invoice_id,))
+    invoice = tbl("invoices").select("*").eq("invoice_id", req.invoice_id).execute().data
     if not invoice:
         raise HTTPException(404, "Invoice not found")
+    receipt, invoice = receipt[0], invoice[0]
 
-    conn = get_conn()
-    try:
-        # Update receipt
-        conn.execute("""
-            UPDATE cash_receipts
-            SET status = 'Applied',
-                invoice_id_applied = ?,
-                amount_applied = amount
-            WHERE receipt_id = ?
-        """, (req.invoice_id, req.receipt_id))
+    tbl("cash_receipts").update({
+        "status": "Applied", "invoice_id_applied": req.invoice_id, "amount_applied": receipt["amount"]
+    }).eq("receipt_id", req.receipt_id).execute()
 
-        # Update invoice status if fully paid
-        if abs(receipt["amount"] - invoice["total_amount"]) < 0.01:
-            conn.execute("""
-                UPDATE invoices SET status = 'Paid' WHERE invoice_id = ?
-            """, (req.invoice_id,))
-        else:
-            conn.execute("""
-                UPDATE invoices SET status = 'Short Pay - Open' WHERE invoice_id = ?
-            """, (req.invoice_id,))
-
-        conn.commit()
-    finally:
-        conn.close()
-
+    new_status = "Paid" if abs(receipt["amount"] - invoice["total_amount"]) < 0.01 else "Short Pay - Open"
+    tbl("invoices").update({"status": new_status}).eq("invoice_id", req.invoice_id).execute()
     return {"ok": True, "message": f"Receipt {req.receipt_id} applied to {req.invoice_id}"}
 
 
-# ── aging ───────────────────────────────────────────────────────────────────
+# ── aging ─────────────────────────────────────────────────────────────────────
 @app.get("/api/aging")
-def aging(
-    customer_id: Optional[str] = None,
-    bucket: Optional[str] = None,
-):
-    clauses, params = [], []
-    if customer_id:
-        clauses.append("customer_id = ?")
-        params.append(customer_id)
-    if bucket:
-        clauses.append("aging_bucket = ?")
-        params.append(bucket)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return query_all(
-        f"SELECT * FROM v_ar_aging {where} ORDER BY days_past_due DESC",
-        tuple(params))
+def aging(customer_id: Optional[str] = None, bucket: Optional[str] = None):
+    q = tbl("v_ar_aging").select("*")
+    if customer_id: q = q.eq("customer_id", customer_id)
+    if bucket:      q = q.eq("aging_bucket", bucket)
+    return q.order("days_past_due", desc=True).execute().data
 
 
 @app.get("/api/aging/summary")
 def aging_summary():
-    return query_all("""
-        SELECT aging_bucket,
-               COUNT(*) AS count,
-               ROUND(SUM(open_balance), 2) AS total
-        FROM v_ar_aging
-        GROUP BY aging_bucket
-        ORDER BY CASE aging_bucket
-            WHEN 'Current' THEN 1
-            WHEN '1-30'   THEN 2
-            WHEN '31-60'  THEN 3
-            WHEN '61-90'  THEN 4
-            WHEN '91-120' THEN 5
-            ELSE 6
-        END
-    """)
+    rows = tbl("v_ar_aging").select("aging_bucket,open_balance").execute().data
+    from collections import defaultdict
+    agg = defaultdict(lambda: {"count": 0, "total": 0.0})
+    for r in rows:
+        b = r["aging_bucket"]
+        agg[b]["count"] += 1
+        agg[b]["total"] = round(agg[b]["total"] + (r["open_balance"] or 0), 2)
+    order = {"Current": 1, "1-30": 2, "31-60": 3, "61-90": 4, "91-120": 5, "120+": 6}
+    return sorted([{"aging_bucket": k, "count": v["count"], "total": v["total"]}
+                   for k, v in agg.items()], key=lambda x: order.get(x["aging_bucket"], 9))
 
 
-# ── customers ───────────────────────────────────────────────────────────────
+# ── customers ─────────────────────────────────────────────────────────────────
 @app.get("/api/customers")
 def customers():
-    return query_all("SELECT * FROM customers ORDER BY customer_name")
+    return tbl("customers").select("*").order("customer_name").execute().data
 
 
 @app.get("/api/customers/balances")
 def customer_balances():
-    return query_all("SELECT * FROM v_subledger_open_by_customer")
+    return tbl("v_subledger_open_by_customer").select("*").execute().data
 
 
 @app.get("/api/customers/{customer_id}")
 def customer_detail(customer_id: str):
-    row = query_one("SELECT * FROM customers WHERE customer_id = ?", (customer_id,))
-    if not row:
+    data = tbl("customers").select("*").eq("customer_id", customer_id).execute().data
+    if not data:
         raise HTTPException(404, f"Customer '{customer_id}' not found")
-    return row
+    return data[0]
 
 
-# ── invoices ────────────────────────────────────────────────────────────────
+@app.patch("/api/customers/{customer_id}")
+def update_customer(customer_id: str, body: dict):
+    allowed = {"customer_name","customer_type","city","state_country",
+               "payment_terms","credit_limit","ap_email","ap_contact"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+    result = tbl("customers").update(updates).eq("customer_id", customer_id).execute().data
+    return result[0] if result else None
+
+
+# ── invoices ──────────────────────────────────────────────────────────────────
 @app.get("/api/invoices")
-def invoices(
-    status: Optional[str] = None,
-    customer_id: Optional[str] = None,
-    period: Optional[str] = None,
-    limit: int = 500,
-):
-    clauses, params = [], []
-    if status:
-        clauses.append("status = ?"); params.append(status)
-    if customer_id:
-        clauses.append("customer_id = ?"); params.append(customer_id)
-    if period:
-        clauses.append("period = ?"); params.append(period)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
-    return query_all(
-        f"SELECT * FROM invoices {where} ORDER BY invoice_date DESC LIMIT ?",
-        tuple(params))
+def invoices(status: Optional[str]=None, customer_id: Optional[str]=None,
+             period: Optional[str]=None, limit: int=500):
+    q = tbl("invoices").select("*")
+    if status:      q = q.eq("status", status)
+    if customer_id: q = q.eq("customer_id", customer_id)
+    if period:      q = q.eq("period", period)
+    return q.order("invoice_date", desc=True).limit(limit).execute().data
 
 
-# ── cash receipts ───────────────────────────────────────────────────────────
+@app.patch("/api/invoices/{invoice_id}")
+def update_invoice(invoice_id: str, body: dict):
+    allowed = {"status","notes","salesperson","territory","po_number",
+               "total_amount","net_amount","gross_amount","discount_amount","tax_amount"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+    result = tbl("invoices").update(updates).eq("invoice_id", invoice_id).execute().data
+    return result[0] if result else None
+
+
+# ── cash receipts ─────────────────────────────────────────────────────────────
 @app.get("/api/receipts")
-def receipts(
-    status: Optional[str] = None,
-    customer_id: Optional[str] = None,
-    limit: int = 500,
-):
-    clauses, params = [], []
-    if status:
-        clauses.append("status = ?"); params.append(status)
-    if customer_id:
-        clauses.append("customer_id = ?"); params.append(customer_id)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
-    return query_all(
-        f"SELECT * FROM cash_receipts {where} ORDER BY receipt_date DESC LIMIT ?",
-        tuple(params))
+def receipts(status: Optional[str]=None, customer_id: Optional[str]=None, limit: int=500):
+    q = tbl("cash_receipts").select("*")
+    if status:      q = q.eq("status", status)
+    if customer_id: q = q.eq("customer_id", customer_id)
+    return q.order("receipt_date", desc=True).limit(limit).execute().data
 
 
-# ── GL entries ──────────────────────────────────────────────────────────────
+@app.patch("/api/receipts/{receipt_id}")
+def update_receipt(receipt_id: str, body: dict):
+    allowed = {"status","notes","amount_applied","invoice_id_applied","payment_method","reference"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        raise HTTPException(400, "No valid fields to update")
+    result = tbl("cash_receipts").update(updates).eq("receipt_id", receipt_id).execute().data
+    return result[0] if result else None
+
+
+# ── GL entries ────────────────────────────────────────────────────────────────
 @app.get("/api/gl-entries")
-def gl_entries(
-    account_code: Optional[str] = None,
-    period: Optional[str] = None,
-    entry_type: Optional[str] = None,
-    limit: int = 500,
-):
-    clauses, params = [], []
-    if account_code:
-        clauses.append("account_code = ?"); params.append(account_code)
-    if period:
-        clauses.append("period = ?"); params.append(period)
-    if entry_type:
-        clauses.append("entry_type = ?"); params.append(entry_type)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
-    return query_all(
-        f"SELECT * FROM gl_entries {where} ORDER BY entry_date DESC, entry_id DESC LIMIT ?",
-        tuple(params))
+def gl_entries(account_code: Optional[str]=None, period: Optional[str]=None,
+               entry_type: Optional[str]=None, limit: int=500):
+    q = tbl("gl_entries").select("*")
+    if account_code: q = q.eq("account_code", account_code)
+    if period:       q = q.eq("period", period)
+    if entry_type:   q = q.eq("entry_type", entry_type)
+    return q.order("entry_date", desc=True).limit(limit).execute().data
 
 
-# ── bank statements ─────────────────────────────────────────────────────────
+# ── bank statements ───────────────────────────────────────────────────────────
 @app.get("/api/bank-statements")
-def bank_statements(
-    reconciled: Optional[str] = None,
-    transaction_type: Optional[str] = None,
-    limit: int = 500,
-):
-    clauses, params = [], []
-    if reconciled:
-        clauses.append("reconciled = ?"); params.append(reconciled)
-    if transaction_type:
-        clauses.append("transaction_type = ?"); params.append(transaction_type)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
-    return query_all(
-        f"SELECT * FROM bank_statements {where} ORDER BY bank_date DESC LIMIT ?",
-        tuple(params))
+def bank_statements(reconciled: Optional[str]=None, transaction_type: Optional[str]=None, limit: int=500):
+    q = tbl("bank_statements").select("*")
+    if reconciled:       q = q.eq("reconciled", reconciled)
+    if transaction_type: q = q.eq("transaction_type", transaction_type)
+    return q.order("bank_date", desc=True).limit(limit).execute().data
+
+
+# ── spreadsheet upload ────────────────────────────────────────────────────────
+UPLOAD_TABLES = {
+    "invoices":        ("invoice_id",  ["invoice_id","customer_id","invoice_date","due_date","period",
+                                         "product_id","product_description","product_category","quantity",
+                                         "unit_price","gross_amount","discount_amount","net_amount",
+                                         "tax_amount","total_amount","status","salesperson","territory",
+                                         "po_number","notes"]),
+    "customers":       ("customer_id", ["customer_id","customer_name","customer_type","city",
+                                         "state_country","payment_terms","credit_limit","ap_email","ap_contact"]),
+    "cash_receipts":   ("receipt_id",  ["receipt_id","customer_id","receipt_date","amount","payment_method",
+                                         "reference","check_number","invoice_id_applied","amount_applied",
+                                         "bank_deposit_id","status","notes"]),
+    "credit_memos":    ("memo_id",     ["memo_id","customer_id","memo_date","period","amount","reason",
+                                         "original_invoice_id","applied_to_invoice_id","gl_entry_id",
+                                         "status","notes"]),
+    "gl_entries":      ("entry_id",    ["entry_id","entry_date","period","account_code","account_name",
+                                         "entry_type","debit","credit","description","source_doc",
+                                         "customer_id","posted_by","notes"]),
+    "bank_statements": ("line_id",     ["line_id","bank_date","value_date","description","debit","credit",
+                                         "deposit_id","transaction_type","matched_receipt_ids",
+                                         "reconciled","notes"]),
+}
+
+
+@app.post("/api/upload/{table}")
+async def upload_spreadsheet(table: str, file: UploadFile = File(...)):
+    if table not in UPLOAD_TABLES:
+        raise HTTPException(400, f"Unknown table '{table}'. Valid: {list(UPLOAD_TABLES)}")
+
+    pk_col, valid_cols = UPLOAD_TABLES[table]
+
+    try:
+        import csv
+        content = await file.read()
+        text = content.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse file: {e}")
+
+    if not rows:
+        return {"ok": True, "inserted": 0, "skipped_duplicates": 0, "errors": [], "total_rows": 0}
+
+    if pk_col not in rows[0]:
+        raise HTTPException(400, f"File must contain column '{pk_col}'")
+
+    # Load existing PKs for duplicate detection
+    existing_rows = tbl(table).select(pk_col).execute().data
+    existing = {r[pk_col] for r in existing_rows}
+
+    inserted, skipped, errors = 0, 0, []
+    batch = []
+
+    for i, row in enumerate(rows, 1):
+        pk_val = (row.get(pk_col) or "").strip()
+        if not pk_val:
+            errors.append(f"Row {i}: missing {pk_col}")
+            continue
+        if pk_val in existing:
+            skipped += 1
+            continue
+
+        record = {}
+        for c in valid_cols:
+            if c in row:
+                v = (row[c] or "").strip()
+                record[c] = None if v == "" else v
+        batch.append(record)
+        existing.add(pk_val)
+
+        # Insert in batches of 100
+        if len(batch) >= 100:
+            try:
+                tbl(table).insert(batch).execute()
+                inserted += len(batch)
+                batch = []
+            except Exception as e:
+                errors.append(f"Batch insert error: {str(e)[:100]}")
+                batch = []
+
+    if batch:
+        try:
+            tbl(table).insert(batch).execute()
+            inserted += len(batch)
+        except Exception as e:
+            errors.append(f"Final batch error: {str(e)[:100]}")
+
+    return {
+        "ok": True,
+        "inserted": inserted,
+        "skipped_duplicates": skipped,
+        "errors": errors,
+        "total_rows": len(rows),
+    }
 
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
-    # reload disabled — uvicorn's reloader crashes on Windows due to CTRL_C_EVENT bug
     uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False)

@@ -11,6 +11,7 @@ import Customers from './pages/Customers.jsx'
 import CustomerDetail from './pages/CustomerDetail.jsx'
 import Periods from './pages/Periods.jsx'
 import Compliance from './pages/Compliance.jsx'
+import Upload from './pages/Upload.jsx'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/customers/:id"   element={<CustomerDetail />} />
         <Route path="/periods"         element={<Periods />} />
         <Route path="/compliance"      element={<Compliance />} />
+        <Route path="/upload"          element={<Upload />} />
       </Routes>
     </Layout>
   )
