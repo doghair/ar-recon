@@ -2,8 +2,16 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../api.js'
 import { fmtMoney, exportToCsv } from '../utils.js'
+import EditModal from '../components/EditModal.jsx'
 
 const STATUSES = ['', 'Open', 'Paid', 'Short Pay - Open', 'Written Off']
+
+const EDIT_FIELDS = [
+  { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Paid', 'Short Pay - Open', 'Written Off'] },
+  { key: 'due_date', label: 'Due Date', type: 'date' },
+  { key: 'po_number', label: 'PO Number', type: 'text' },
+  { key: 'product_description', label: 'Product Description', type: 'text' },
+]
 
 function statusBadge(s) {
   const cls = s === 'Paid'               ? 'paid'
@@ -19,10 +27,21 @@ export default function Invoices() {
   const [rows, setRows] = useState([])
   const [status, setStatus] = useState(searchParams.get('status') || '')
   const [period, setPeriod] = useState('')
+  const [editing, setEditing] = useState(null) // row being edited
 
   useEffect(() => {
     api.invoices({ status, period, limit: 1000 }).then(setRows)
   }, [status, period])
+
+  async function handleSave(updated) {
+    const changed = {}
+    EDIT_FIELDS.forEach(f => {
+      if (updated[f.key] !== editing[f.key]) changed[f.key] = updated[f.key]
+    })
+    if (Object.keys(changed).length === 0) return
+    await api.updateInvoice(editing.invoice_id, changed)
+    setRows(rs => rs.map(r => r.invoice_id === editing.invoice_id ? { ...r, ...changed } : r))
+  }
 
   return (
     <div className="page">
@@ -66,6 +85,7 @@ export default function Invoices() {
               <th>Status</th>
               <th>GL Entry</th>
               <th>PO #</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -83,11 +103,24 @@ export default function Invoices() {
                   {r.gl_entry_id || 'MISSING'}
                 </td>
                 <td className="muted">{r.po_number}</td>
+                <td>
+                  <button className="btn-edit" onClick={() => setEditing(r)}>Edit</button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {editing && (
+        <EditModal
+          title={`Edit Invoice ${editing.invoice_id}`}
+          fields={EDIT_FIELDS}
+          values={editing}
+          onSave={handleSave}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   )
 }
