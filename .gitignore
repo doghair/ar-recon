@@ -12,8 +12,8 @@ frontend/node_modules/
 # Build output
 frontend/dist/
 
-# Database
-db/*.db
+# Database committed to git for Vercel deployment
+# db/*.db
 
 # Data (generated)
 data/*.csv

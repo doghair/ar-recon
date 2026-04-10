@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-DB_PATH = Path(__file__).resolve().parent.parent / "db" / "arrecon.db"
+DB_PATH = Path(os.environ.get("AR_DB_PATH") or str(Path(__file__).resolve().parent.parent / "db" / "arrecon.db"))
 
 app = FastAPI(title="AR Reconciliation API", version="0.2.0")
 
