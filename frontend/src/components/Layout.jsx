@@ -1,29 +1,40 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 
 export default function Layout({ children }) {
+  const [open, setOpen] = useState(false)
   const link = ({ isActive }) => (isActive ? 'active' : '')
+  const close = () => setOpen(false)
+
   return (
     <div className="layout">
-      <aside className="sidebar">
+      <div className="mobile-header">
+        <button className="hamburger" onClick={() => setOpen(o => !o)} aria-label="Toggle menu">☰</button>
+        <span className="mobile-header-title">AR RECON</span>
+      </div>
+
+      <div className={`sidebar-overlay${open ? ' open' : ''}`} onClick={close} />
+
+      <aside className={`sidebar${open ? ' open' : ''}`}>
         <div className="sidebar-brand">
           <h1>AR RECON</h1>
           <div className="sub">Biotech Co · Q1 2026</div>
         </div>
         <nav>
-          <NavLink to="/"                className={link} end>Dashboard</NavLink>
-          <NavLink to="/exceptions"      className={link}>Exceptions</NavLink>
-          <NavLink to="/aging"           className={link}>AR Aging</NavLink>
-          <NavLink to="/invoices"        className={link}>Invoices</NavLink>
-          <NavLink to="/receipts"        className={link}>Cash Receipts</NavLink>
-          <NavLink to="/gl-entries"      className={link}>GL Entries</NavLink>
-          <NavLink to="/bank-statements" className={link}>Bank Statements</NavLink>
+          <NavLink to="/"                className={link} end           onClick={close}>Dashboard</NavLink>
+          <NavLink to="/exceptions"      className={link}               onClick={close}>Exceptions</NavLink>
+          <NavLink to="/aging"           className={link}               onClick={close}>AR Aging</NavLink>
+          <NavLink to="/invoices"        className={link}               onClick={close}>Invoices</NavLink>
+          <NavLink to="/receipts"        className={link}               onClick={close}>Cash Receipts</NavLink>
+          <NavLink to="/gl-entries"      className={link}               onClick={close}>GL Entries</NavLink>
+          <NavLink to="/bank-statements" className={link}               onClick={close}>Bank Statements</NavLink>
 
           <div className="sidebar-divider" />
-          <NavLink to="/customers"       className={link}>Customers</NavLink>
-          <NavLink to="/periods"         className={link}>Period Lock</NavLink>
+          <NavLink to="/customers"       className={link}               onClick={close}>Customers</NavLink>
+          <NavLink to="/periods"         className={link}               onClick={close}>Period Lock</NavLink>
 
           <div className="sidebar-divider" />
-          <NavLink to="/compliance"      className={link}>SEC Compliance</NavLink>
+          <NavLink to="/compliance"      className={link}               onClick={close}>SEC Compliance</NavLink>
         </nav>
       </aside>
       <main className="main">{children}</main>
