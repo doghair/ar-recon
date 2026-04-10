@@ -1,14 +1,33 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { fmtMoney } from '../utils.js'
+import EditModal from '../components/EditModal.jsx'
+
+const EDIT_FIELDS = [
+  { key: 'status', label: 'Status', type: 'select', options: ['Applied', 'Unapplied'] },
+  { key: 'invoice_id_applied', label: 'Applied To Invoice', type: 'text' },
+  { key: 'payment_method', label: 'Payment Method', type: 'text' },
+  { key: 'reference', label: 'Reference', type: 'text' },
+]
 
 export default function Receipts() {
   const [rows, setRows] = useState([])
   const [status, setStatus] = useState('')
+  const [editing, setEditing] = useState(null)
 
   useEffect(() => {
     api.receipts({ status, limit: 1000 }).then(setRows)
   }, [status])
+
+  async function handleSave(updated) {
+    const changed = {}
+    EDIT_FIELDS.forEach(f => {
+      if (updated[f.key] !== editing[f.key]) changed[f.key] = updated[f.key]
+    })
+    if (Object.keys(changed).length === 0) return
+    await api.updateReceipt(editing.receipt_id, changed)
+    setRows(rs => rs.map(r => r.receipt_id === editing.receipt_id ? { ...r, ...changed } : r))
+  }
 
   return (
     <div className="page">
@@ -40,6 +59,7 @@ export default function Receipts() {
               <th className="right">Amount</th>
               <th>Deposit</th>
               <th>Status</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -58,11 +78,24 @@ export default function Receipts() {
                     {r.status}
                   </span>
                 </td>
+                <td>
+                  <button className="btn-edit" onClick={() => setEditing(r)}>Edit</button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {editing && (
+        <EditModal
+          title={`Edit Receipt ${editing.receipt_id}`}
+          fields={EDIT_FIELDS}
+          values={editing}
+          onSave={handleSave}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   )
 }

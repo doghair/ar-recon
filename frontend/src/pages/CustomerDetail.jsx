@@ -2,6 +2,15 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../api.js'
 import { fmtMoney, fmtNum, exportToCsv } from '../utils.js'
+import EditModal from '../components/EditModal.jsx'
+
+const CUSTOMER_EDIT_FIELDS = [
+  { key: 'ap_contact', label: 'AP Contact', type: 'text' },
+  { key: 'ap_email', label: 'AP Email', type: 'email' },
+  { key: 'payment_terms', label: 'Payment Terms', type: 'text' },
+  { key: 'credit_limit', label: 'Credit Limit', type: 'number' },
+  { key: 'customer_type', label: 'Customer Type', type: 'select', options: ['Biotech', 'Pharma', 'Academic', 'Hospital', 'CRO'] },
+]
 
 export default function CustomerDetail() {
   const { id } = useParams()
@@ -10,6 +19,7 @@ export default function CustomerDetail() {
   const [receipts, setReceipts] = useState([])
   const [aging, setAging] = useState([])
   const [err, setErr] = useState(null)
+  const [editingCustomer, setEditingCustomer] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -26,6 +36,16 @@ export default function CustomerDetail() {
       })
       .catch(e => setErr(e.message))
   }, [id])
+
+  async function handleCustomerSave(updated) {
+    const changed = {}
+    CUSTOMER_EDIT_FIELDS.forEach(f => {
+      if (String(updated[f.key]) !== String(cust[f.key])) changed[f.key] = updated[f.key]
+    })
+    if (Object.keys(changed).length === 0) return
+    await api.updateCustomer(id, changed)
+    setCust(c => ({ ...c, ...changed }))
+  }
 
   if (err) return <div className="loading">Error: {err}</div>
   if (!cust) return <div className="loading">Loading customer…</div>
@@ -76,12 +96,17 @@ export default function CustomerDetail() {
 
       {/* Customer info card */}
       <div className="card">
-        <h2>Customer Information</h2>
+        <div className="card-header">
+          <h2>Customer Information</h2>
+          <button className="btn btn-sm" onClick={() => setEditingCustomer(true)}>Edit</button>
+        </div>
         <div className="detail-grid">
           <div><span className="muted">Location:</span> {cust.city}, {cust.state_country}</div>
           <div><span className="muted">AP Contact:</span> {cust.ap_contact || '—'}</div>
           <div><span className="muted">AP Email:</span> {cust.ap_email || '—'}</div>
           <div><span className="muted">Payment Terms:</span> {cust.payment_terms}</div>
+          <div><span className="muted">Credit Limit:</span> {fmtMoney(cust.credit_limit)}</div>
+          <div><span className="muted">Type:</span> {cust.customer_type}</div>
         </div>
       </div>
 
@@ -203,6 +228,16 @@ export default function CustomerDetail() {
           </table>
         </div>
       </div>
+
+      {editingCustomer && (
+        <EditModal
+          title={`Edit ${cust.customer_name}`}
+          fields={CUSTOMER_EDIT_FIELDS}
+          values={cust}
+          onSave={handleCustomerSave}
+          onClose={() => setEditingCustomer(false)}
+        />
+      )}
     </div>
   )
 }
