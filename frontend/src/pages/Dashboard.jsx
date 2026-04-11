@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api.js'
-import { fmtMoney, fmtNum, varianceClass } from '../utils.js'
+import { fmtMoney, fmtMoneyCompact, fmtNum, varianceClass } from '../utils.js'
 import {
   CashFlowChart,
   NetARChangeChart,
@@ -183,24 +183,24 @@ export default function Dashboard() {
       <div className={`kpi-strip${loading ? ' kpi-loading' : ''}`}>
         <div className="kpi-card">
           <div className="kpi-label">GL AR Control</div>
-          <div className="kpi-value">{fmtMoney(current?.gl_ar_total)}</div>
-          <div className="kpi-sub">Account 1200</div>
+          <div className="kpi-value">{fmtMoneyCompact(current?.gl_ar_total)}</div>
+          <div className="kpi-sub">Account 1200 · {fmtMoney(current?.gl_ar_total)}</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label">Subledger Open</div>
-          <div className="kpi-value">{fmtMoney(current?.subledger_open_total)}</div>
+          <div className="kpi-value">{fmtMoneyCompact(current?.subledger_open_total)}</div>
           <div className="kpi-sub">{fmtNum(kpis?.open_invoice_count ?? '—')} open invoices</div>
         </div>
         <div className={`kpi-card variance ${vClass}`}>
           <div className="kpi-label">Variance</div>
-          <div className="kpi-value">{fmtMoney(current?.variance)}</div>
+          <div className="kpi-value">{fmtMoneyCompact(current?.variance)}</div>
           <div className="kpi-sub">
             {vClass === 'zero' ? 'Fully Reconciled' : 'Needs Investigation'}
           </div>
         </div>
         <div className="kpi-card accent">
           <div className="kpi-label">Cash Collected</div>
-          <div className="kpi-value">{fmtMoney(kpis?.total_collected)}</div>
+          <div className="kpi-value">{fmtMoneyCompact(kpis?.total_collected)}</div>
           <div className="kpi-sub">
             {kpis?.collection_rate}% collection rate
           </div>
@@ -210,7 +210,7 @@ export default function Dashboard() {
           <div className="kpi-value" style={{ color: (kpis?.dso_days ?? 0) > 45 ? 'var(--color-neg)' : 'var(--color-pos)' }}>
             {kpis?.dso_days ?? '—'} <span style={{ fontSize: 14, fontWeight: 500 }}>days</span>
           </div>
-          <div className="kpi-sub">Avg invoice {fmtMoney(kpis?.avg_invoice_size)}</div>
+          <div className="kpi-sub">Avg invoice {fmtMoneyCompact(kpis?.avg_invoice_size)}</div>
         </div>
       </div>
 
@@ -220,10 +220,10 @@ export default function Dashboard() {
           <h2>Cash Flow: Invoiced vs Collected</h2>
           <div className="muted">
             {kpis && <>
-              Invoiced {fmtMoney(kpis.total_invoiced)} ·
-              Collected {fmtMoney(kpis.total_collected)} ·
-              Credits {fmtMoney(kpis.total_credit_memos)} ·
-              Write-Offs {fmtMoney(kpis.total_writeoffs)}
+              Invoiced {fmtMoneyCompact(kpis.total_invoiced)} ·
+              Collected {fmtMoneyCompact(kpis.total_collected)} ·
+              Credits {fmtMoneyCompact(kpis.total_credit_memos)} ·
+              Write-Offs {fmtMoneyCompact(kpis.total_writeoffs)}
             </>}
           </div>
         </div>
