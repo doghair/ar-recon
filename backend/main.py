@@ -88,6 +88,19 @@ def dashboard():
     }
 
 
+def fetch_all(query, page_size: int = 1000) -> list:
+    """Paginate a supabase-py query to bypass the PostgREST default row cap."""
+    results = []
+    offset  = 0
+    while True:
+        page = query.range(offset, offset + page_size - 1).execute().data
+        results.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return results
+
+
 # ── cash flow ─────────────────────────────────────────────────────────────────
 @app.get("/api/cashflow")
 def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
@@ -95,9 +108,9 @@ def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
         return rpc("get_cashflow")
 
     from collections import defaultdict
-    inv_q = tbl("invoices").select("period,invoice_date,total_amount,status").limit(10000)
-    rcp_q = tbl("cash_receipts").select("receipt_date,amount").limit(10000)
-    cm_q  = tbl("credit_memos").select("memo_date,amount").limit(10000)
+    inv_q = tbl("invoices").select("period,invoice_date,total_amount,status")
+    rcp_q = tbl("cash_receipts").select("receipt_date,amount")
+    cm_q  = tbl("credit_memos").select("memo_date,amount")
 
     if date_from:
         inv_q = inv_q.gte("invoice_date", date_from)
@@ -110,7 +123,7 @@ def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
 
     by_period: dict = defaultdict(lambda: {"period": "", "invoiced": 0.0, "collected": 0.0, "credits": 0.0, "writeoffs": 0.0})
 
-    for r in inv_q.execute().data:
+    for r in fetch_all(inv_q):
         p = r.get("period") or (r.get("invoice_date") or "")[:7]
         by_period[p]["period"] = p
         if r.get("status") == "Written Off":
@@ -118,13 +131,13 @@ def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
         else:
             by_period[p]["invoiced"] = round(by_period[p]["invoiced"] + (r["total_amount"] or 0), 2)
 
-    for r in rcp_q.execute().data:
+    for r in fetch_all(rcp_q):
         p = (r.get("receipt_date") or "")[:7]
         if p:
             by_period[p]["period"] = p
             by_period[p]["collected"] = round(by_period[p]["collected"] + (r["amount"] or 0), 2)
 
-    for r in cm_q.execute().data:
+    for r in fetch_all(cm_q):
         p = (r.get("memo_date") or "")[:7]
         if p:
             by_period[p]["period"] = p
@@ -160,9 +173,9 @@ def ar_trend_daily():
 def kpis(date_from: Optional[str] = None, date_to: Optional[str] = None):
     if date_from or date_to:
         # Compute KPIs from filtered tables
-        inv_q = tbl("invoices").select("total_amount,status").limit(10000)
-        rcp_q = tbl("cash_receipts").select("amount").limit(10000)
-        cm_q  = tbl("credit_memos").select("amount").limit(10000)
+        inv_q = tbl("invoices").select("total_amount,status")
+        rcp_q = tbl("cash_receipts").select("amount")
+        cm_q  = tbl("credit_memos").select("amount")
 
         if date_from:
             inv_q = inv_q.gte("invoice_date", date_from)
@@ -173,9 +186,9 @@ def kpis(date_from: Optional[str] = None, date_to: Optional[str] = None):
             rcp_q = rcp_q.lte("receipt_date", date_to)
             cm_q  = cm_q.lte("memo_date", date_to)
 
-        invoices = inv_q.execute().data
-        receipts = rcp_q.execute().data
-        memos    = cm_q.execute().data
+        invoices = fetch_all(inv_q)
+        receipts = fetch_all(rcp_q)
+        memos    = fetch_all(cm_q)
 
         total_invoiced     = sum((r["total_amount"] or 0) for r in invoices if r.get("status") != "Written Off")
         total_collected    = sum((r["amount"] or 0) for r in receipts)
