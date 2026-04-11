@@ -95,9 +95,9 @@ def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
         return rpc("get_cashflow")
 
     from collections import defaultdict
-    inv_q = tbl("invoices").select("period,invoice_date,total_amount,status")
-    rcp_q = tbl("cash_receipts").select("receipt_date,amount")
-    cm_q  = tbl("credit_memos").select("memo_date,amount")
+    inv_q = tbl("invoices").select("period,invoice_date,total_amount,status").limit(10000)
+    rcp_q = tbl("cash_receipts").select("receipt_date,amount").limit(10000)
+    cm_q  = tbl("credit_memos").select("memo_date,amount").limit(10000)
 
     if date_from:
         inv_q = inv_q.gte("invoice_date", date_from)
@@ -160,9 +160,9 @@ def ar_trend_daily():
 def kpis(date_from: Optional[str] = None, date_to: Optional[str] = None):
     if date_from or date_to:
         # Compute KPIs from filtered tables
-        inv_q = tbl("invoices").select("total_amount,status")
-        rcp_q = tbl("cash_receipts").select("amount")
-        cm_q  = tbl("credit_memos").select("amount")
+        inv_q = tbl("invoices").select("total_amount,status").limit(10000)
+        rcp_q = tbl("cash_receipts").select("amount").limit(10000)
+        cm_q  = tbl("credit_memos").select("amount").limit(10000)
 
         if date_from:
             inv_q = inv_q.gte("invoice_date", date_from)
