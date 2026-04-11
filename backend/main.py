@@ -133,6 +133,17 @@ def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
     return sorted(by_period.values(), key=lambda x: x["period"])
 
 
+# ── Data range ───────────────────────────────────────────────────────────────
+@app.get("/api/data-range")
+def data_range():
+    """Return the min and max invoice_date across all invoices."""
+    rows = tbl("invoices").select("invoice_date").order("invoice_date", desc=False).limit(1).execute().data
+    rows_max = tbl("invoices").select("invoice_date").order("invoice_date", desc=True).limit(1).execute().data
+    min_date = rows[0]["invoice_date"] if rows else None
+    max_date = rows_max[0]["invoice_date"] if rows_max else None
+    return {"min_date": min_date, "max_date": max_date}
+
+
 # ── AR balance trend ──────────────────────────────────────────────────────────
 @app.get("/api/ar-trend")
 def ar_trend():

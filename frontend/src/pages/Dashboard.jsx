@@ -12,7 +12,6 @@ import {
 } from '../components/charts.jsx'
 
 // ── Period helpers ────────────────────────────────────────────────────────────
-const PRESETS = ['Q1', 'Q2', 'Q3', 'Q4', 'YTD', 'Custom']
 const QUARTER_RANGES = {
   Q1: ['01-01', '03-31'],
   Q2: ['04-01', '06-30'],
@@ -20,8 +19,7 @@ const QUARTER_RANGES = {
   Q4: ['10-01', '12-31'],
 }
 
-function presetRange(preset, year) {
-  const today = new Date().toISOString().slice(0, 10)
+function presetRange(preset, year, today) {
   if (preset === 'YTD') return [`${year}-01-01`, today]
   const [s, e] = QUARTER_RANGES[preset]
   return [`${year}-${s}`, `${year}-${e}`]
@@ -32,22 +30,47 @@ function fmtPresetLabel(preset, year) {
   return `${preset} ${year}`
 }
 
+/**
+ * Given a year and the dataset's min/max dates, return which quarter presets
+ * have any data overlap. 'YTD' and 'Custom' are always included.
+ */
+function availablePresets(year, minDate, maxDate) {
+  const presets = []
+  const dataMin = minDate ? minDate.slice(0, 10) : null
+  const dataMax = maxDate ? maxDate.slice(0, 10) : null
+
+  for (const q of ['Q1', 'Q2', 'Q3', 'Q4']) {
+    const [s, e] = QUARTER_RANGES[q]
+    const qStart = `${year}-${s}`
+    const qEnd   = `${year}-${e}`
+    // Quarter overlaps data range if qStart <= dataMax AND qEnd >= dataMin
+    const hasData = (!dataMax || qStart <= dataMax) && (!dataMin || qEnd >= dataMin)
+    if (hasData) presets.push(q)
+  }
+
+  presets.push('YTD', 'Custom')
+  return presets
+}
+
 // ── Period selector component ─────────────────────────────────────────────────
-function PeriodSelector({ preset, year, customFrom, customTo, onChange }) {
-  const currentYear = new Date().getFullYear()
-  const years = [currentYear - 1, currentYear, currentYear + 1]
+function PeriodSelector({ preset, year, customFrom, customTo, availableYears, minDate, maxDate, onChange }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const presets = availablePresets(year, minDate, maxDate)
 
   function setPreset(p) {
     if (p === 'Custom') { onChange({ preset: 'Custom', year, customFrom, customTo }); return }
-    const [from, to] = presetRange(p, year)
+    const [from, to] = presetRange(p, year, today)
     onChange({ preset: p, year, customFrom: from, customTo: to })
   }
 
   function setYear(y) {
     const newYear = Number(y)
-    if (preset === 'Custom') { onChange({ preset, year: newYear, customFrom, customTo }); return }
-    const [from, to] = presetRange(preset, newYear)
-    onChange({ preset, year: newYear, customFrom: from, customTo: to })
+    // If current preset is available in the new year, keep it; else pick first available
+    const newPresets = availablePresets(newYear, minDate, maxDate)
+    const nextPreset = newPresets.includes(preset) ? preset : newPresets[0]
+    if (nextPreset === 'Custom') { onChange({ preset: 'Custom', year: newYear, customFrom, customTo }); return }
+    const [from, to] = presetRange(nextPreset, newYear, today)
+    onChange({ preset: nextPreset, year: newYear, customFrom: from, customTo: to })
   }
 
   function setCustom(field, val) {
@@ -63,11 +86,11 @@ function PeriodSelector({ preset, year, customFrom, customTo, onChange }) {
           value={year}
           onChange={e => setYear(e.target.value)}
         >
-          {years.map(y => <option key={y} value={y}>{y}</option>)}
+          {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
 
         <div className="period-presets">
-          {PRESETS.map(p => (
+          {presets.map(p => (
             <button
               key={p}
               className={`period-btn${preset === p ? ' active' : ''}`}
@@ -106,40 +129,58 @@ function PeriodSelector({ preset, year, customFrom, customTo, onChange }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 const TODAY = new Date().toISOString().slice(0, 10)
-const CUR_YEAR = new Date().getFullYear()
 
 export default function Dashboard() {
-  const [dash,     setDash]     = useState(null)
-  const [kpis,     setKpis]     = useState(null)
-  const [cashflow, setCashflow] = useState(null)
-  const [trend,    setTrend]    = useState(null)
-  const [err,      setErr]      = useState(null)
-  const [loading,  setLoading]  = useState(false)
+  const [dash,          setDash]          = useState(null)
+  const [kpis,          setKpis]          = useState(null)
+  const [cashflow,      setCashflow]       = useState(null)
+  const [trend,         setTrend]          = useState(null)
+  const [err,           setErr]            = useState(null)
+  const [loading,       setLoading]        = useState(false)
+  const [availableYears, setAvailableYears] = useState([])
+  const [minDate,       setMinDate]        = useState(null)
+  const [maxDate,       setMaxDate]        = useState(null)
+  const [period,        setPeriod]         = useState(null) // null until data-range loaded
 
-  // Period state — default to Q1 of current year (where the data lives)
-  const [period, setPeriod] = useState({
-    preset:     'Q1',
-    year:       CUR_YEAR,
-    customFrom: `${CUR_YEAR}-01-01`,
-    customTo:   `${CUR_YEAR}-03-31`,
-  })
-
-  // Load static dashboard data once (aging, exceptions, trend don't change with period)
+  // Load static dashboard data + data range once
   useEffect(() => {
-    Promise.all([api.dashboard(), api.arTrend()])
-      .then(([d, t]) => { setDash(d); setTrend(t) })
+    Promise.all([api.dashboard(), api.arTrend(), api.dataRange()])
+      .then(([d, t, range]) => {
+        setDash(d)
+        setTrend(t)
+
+        const minD = range.min_date || TODAY
+        const maxD = range.max_date || TODAY
+        setMinDate(minD)
+        setMaxDate(maxD)
+
+        // Build list of years that have data
+        const minYear = Number(minD.slice(0, 4))
+        const maxYear = Number(maxD.slice(0, 4))
+        const years = []
+        for (let y = maxYear; y >= minYear; y--) years.push(y)
+        setAvailableYears(years)
+
+        // Default: most recent year, first available quarter
+        const defaultYear = maxYear
+        const presets = availablePresets(defaultYear, minD, maxD)
+        const defaultPreset = presets[0] // first available (Q1, Q2, etc.)
+        const [from, to] = presetRange(defaultPreset, defaultYear, TODAY)
+        setPeriod({ preset: defaultPreset, year: defaultYear, customFrom: from, customTo: to })
+      })
       .catch(e => setErr(e.message))
   }, [])
 
   // Reload KPIs + cashflow whenever period changes
   useEffect(() => {
+    if (!period) return
     const params = { date_from: period.customFrom, date_to: period.customTo }
     setLoading(true)
     Promise.all([api.kpis(params), api.cashflow(params)])
       .then(([k, cf]) => { setKpis(k); setCashflow(cf) })
       .catch(e => setErr(e.message))
       .finally(() => setLoading(false))
-  }, [period.customFrom, period.customTo])
+  }, [period?.customFrom, period?.customTo])
 
   function handlePeriodChange(next) {
     // For custom, only refetch once both dates are set
@@ -151,7 +192,7 @@ export default function Dashboard() {
   }
 
   if (err) return <div className="loading">Error: {err}</div>
-  if (!dash || !trend) return <div className="loading">Loading dashboard…</div>
+  if (!dash || !trend || !period) return <div className="loading">Loading dashboard…</div>
 
   const { current, exception_counts, aging, period_summary, top_customers } = dash
   const vClass = varianceClass(current?.variance)
@@ -176,6 +217,9 @@ export default function Dashboard() {
         year={period.year}
         customFrom={period.customFrom}
         customTo={period.customTo}
+        availableYears={availableYears}
+        minDate={minDate}
+        maxDate={maxDate}
         onChange={handlePeriodChange}
       />
 
