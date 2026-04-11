@@ -45,9 +45,9 @@ async function post(path, body) {
 
 export const api = {
   health:             ()         => request('/api/health'),
-  dashboard:          ()         => request('/api/dashboard'),
-  kpis:               ()         => request('/api/kpis'),
-  cashflow:           ()         => request('/api/cashflow'),
+  dashboard:          ()             => request('/api/dashboard'),
+  kpis:               (params)       => request('/api/kpis', params),
+  cashflow:           (params)       => request('/api/cashflow', params),
   arTrend:            ()         => request('/api/ar-trend'),
   arTrendDaily:       ()         => request('/api/ar-trend/daily'),
   reconCurrent:       ()         => request('/api/reconciliation/current'),

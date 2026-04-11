@@ -90,9 +90,47 @@ def dashboard():
 
 # ── cash flow ─────────────────────────────────────────────────────────────────
 @app.get("/api/cashflow")
-def cashflow():
-    rows = rpc("get_cashflow")
-    return rows
+def cashflow(date_from: Optional[str] = None, date_to: Optional[str] = None):
+    if not date_from and not date_to:
+        return rpc("get_cashflow")
+
+    from collections import defaultdict
+    inv_q = tbl("invoices").select("period,invoice_date,total_amount,status")
+    rcp_q = tbl("cash_receipts").select("receipt_date,amount")
+    cm_q  = tbl("credit_memos").select("memo_date,amount")
+
+    if date_from:
+        inv_q = inv_q.gte("invoice_date", date_from)
+        rcp_q = rcp_q.gte("receipt_date", date_from)
+        cm_q  = cm_q.gte("memo_date", date_from)
+    if date_to:
+        inv_q = inv_q.lte("invoice_date", date_to)
+        rcp_q = rcp_q.lte("receipt_date", date_to)
+        cm_q  = cm_q.lte("memo_date", date_to)
+
+    by_period: dict = defaultdict(lambda: {"period": "", "invoiced": 0.0, "collected": 0.0, "credits": 0.0, "writeoffs": 0.0})
+
+    for r in inv_q.execute().data:
+        p = r.get("period") or (r.get("invoice_date") or "")[:7]
+        by_period[p]["period"] = p
+        if r.get("status") == "Written Off":
+            by_period[p]["writeoffs"] = round(by_period[p]["writeoffs"] + (r["total_amount"] or 0), 2)
+        else:
+            by_period[p]["invoiced"] = round(by_period[p]["invoiced"] + (r["total_amount"] or 0), 2)
+
+    for r in rcp_q.execute().data:
+        p = (r.get("receipt_date") or "")[:7]
+        if p:
+            by_period[p]["period"] = p
+            by_period[p]["collected"] = round(by_period[p]["collected"] + (r["amount"] or 0), 2)
+
+    for r in cm_q.execute().data:
+        p = (r.get("memo_date") or "")[:7]
+        if p:
+            by_period[p]["period"] = p
+            by_period[p]["credits"] = round(by_period[p]["credits"] + (r["amount"] or 0), 2)
+
+    return sorted(by_period.values(), key=lambda x: x["period"])
 
 
 # ── AR balance trend ──────────────────────────────────────────────────────────
@@ -108,8 +146,43 @@ def ar_trend_daily():
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 @app.get("/api/kpis")
-def kpis():
-    totals  = rpc("get_kpis")
+def kpis(date_from: Optional[str] = None, date_to: Optional[str] = None):
+    if date_from or date_to:
+        # Compute KPIs from filtered tables
+        inv_q = tbl("invoices").select("total_amount,status")
+        rcp_q = tbl("cash_receipts").select("amount")
+        cm_q  = tbl("credit_memos").select("amount")
+
+        if date_from:
+            inv_q = inv_q.gte("invoice_date", date_from)
+            rcp_q = rcp_q.gte("receipt_date", date_from)
+            cm_q  = cm_q.gte("memo_date", date_from)
+        if date_to:
+            inv_q = inv_q.lte("invoice_date", date_to)
+            rcp_q = rcp_q.lte("receipt_date", date_to)
+            cm_q  = cm_q.lte("memo_date", date_to)
+
+        invoices = inv_q.execute().data
+        receipts = rcp_q.execute().data
+        memos    = cm_q.execute().data
+
+        total_invoiced     = sum((r["total_amount"] or 0) for r in invoices if r.get("status") != "Written Off")
+        total_collected    = sum((r["amount"] or 0) for r in receipts)
+        total_writeoffs    = sum((r["total_amount"] or 0) for r in invoices if r.get("status") == "Written Off")
+        total_credit_memos = sum((r["amount"] or 0) for r in memos)
+        inv_count          = len([r for r in invoices if r.get("status") != "Written Off"])
+        totals = {
+            "total_invoiced":     round(total_invoiced, 2),
+            "total_collected":    round(total_collected, 2),
+            "total_writeoffs":    round(total_writeoffs, 2),
+            "total_credit_memos": round(total_credit_memos, 2),
+            "invoice_count":      inv_count,
+            "open_invoice_count": len([r for r in invoices if r.get("status") in ("Open", "Short Pay - Open")]),
+        }
+    else:
+        totals = rpc("get_kpis")
+
+    # Current AR snapshot (always live, not period-filtered)
     current = tbl("v_reconciliation_current").select("*").execute().data
     current = current[0] if current else {}
 

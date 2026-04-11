@@ -704,6 +704,111 @@ a:hover { text-decoration: underline; }
   }
 }
 
+/* ── Period Selector ───────────────────────────────────────────────────────── */
+.period-selector {
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.period-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.period-year-select {
+  padding: 7px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--color-card);
+  color: var(--color-text);
+  font-family: inherit;
+  cursor: pointer;
+}
+.period-year-select:focus { outline: none; border-color: var(--color-accent); }
+
+.period-presets {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.period-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--color-card);
+  color: var(--color-muted);
+  transition: all 0.12s;
+  font-family: inherit;
+}
+.period-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+.period-btn.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #000;
+  font-weight: 700;
+}
+
+.period-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.period-custom label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.period-custom input[type="date"] {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--color-card);
+  color: var(--color-text);
+  font-family: inherit;
+}
+.period-custom input[type="date"]:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.period-custom-sep {
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+/* Dim KPI strip while period is loading */
+.kpi-strip.kpi-loading {
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
 /* ── Edit Modal ────────────────────────────────────────────────────────────── */
 .modal-backdrop {
   position: fixed;
