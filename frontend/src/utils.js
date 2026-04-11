@@ -15,8 +15,8 @@ export const fmtMoneyCompact = (n) => {
   if (Number.isNaN(num)) return '—'
   const abs  = Math.abs(num)
   const sign = num < 0 ? '-' : ''
-  if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(2)}B`
-  if (abs >= 1_000_000)     return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`
+  if (abs >= 1_000_000)     return `${sign}$${(abs / 1_000_000).toFixed(1)}M`
   if (abs >= 10_000)        return `${sign}$${Math.round(abs / 1_000)}k`
   if (abs >= 1_000)         return `${sign}$${(abs / 1_000).toFixed(1)}k`
   return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
