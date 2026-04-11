@@ -187,10 +187,12 @@ def insert_batch(table, rows, batch=50):
 # ── Delete previous historical data ──────────────────────────────────────────
 def delete_historical():
     print("Deleting previous historical data...")
-    # GL entries: by period (2024 and 2025 only)
+    # GL entries: by period range AND by ID prefix (receipts may land in 2026)
     sb.table("gl_entries").delete().gte("period", "2024-01").lte("period", "2025-12").execute()
-    # Credit memos: by date range
-    sb.table("credit_memos").delete().gte("memo_date", "2024-01-01").lte("memo_date", "2025-12-31").execute()
+    sb.table("gl_entries").delete().gte("entry_id", "GL-10000").execute()
+    sb.table("gl_entries").delete().gte("entry_id", "GL-INV-10000").execute()
+    # Credit memos: by date range + ID prefix
+    sb.table("credit_memos").delete().gte("memo_id", "CM-10000").execute()
     # Bank statements: by ID prefix
     sb.table("bank_statements").delete().gte("line_id", "BNK-10000").execute()
     # Cash receipts: by ID prefix
@@ -308,15 +310,17 @@ def assign_deposits(receipts):
     return receipts
 
 def gen_gl_invoices(invoices):
+    """Double-entry: Debit 1200 AR + Credit 4000 Revenue per invoice."""
     entries = []
     for inv in invoices:
+        # Debit AR
         entries.append({
             "entry_id":    inv["gl_entry_id"],
             "entry_date":  inv["invoice_date"],
             "period":      inv["period"],
             "account_code":"1200",
             "account_name":"Accounts Receivable",
-            "entry_type":  "AR",
+            "entry_type":  "Invoice",
             "debit":       inv["total_amount"],
             "credit":      0,
             "description": f"Invoice {inv['invoice_id']} - {inv['product_description']}",
@@ -325,23 +329,97 @@ def gen_gl_invoices(invoices):
             "posted_by":   "System",
             "notes":       None,
         })
+        # Credit Revenue
+        entries.append({
+            "entry_id":    next_gl(),
+            "entry_date":  inv["invoice_date"],
+            "period":      inv["period"],
+            "account_code":"4000",
+            "account_name":"Product Revenue",
+            "entry_type":  "Invoice",
+            "debit":       0,
+            "credit":      inv["total_amount"],
+            "description": f"Revenue - Invoice {inv['invoice_id']}",
+            "source_doc":  inv["invoice_id"],
+            "customer_id": inv["customer_id"],
+            "posted_by":   "System",
+            "notes":       None,
+        })
     return entries
 
 def gen_gl_receipts(receipts):
+    """Double-entry: Debit 1000 Cash + Credit 1200 AR per receipt."""
     entries = []
     for rcp in receipts:
+        period = rcp["receipt_date"][:7]
+        # Debit Cash
         entries.append({
             "entry_id":    next_gl(),
             "entry_date":  rcp["receipt_date"],
-            "period":      rcp["receipt_date"][:7],
+            "period":      period,
             "account_code":"1000",
             "account_name":"Cash & Cash Equivalents",
-            "entry_type":  "Cash",
+            "entry_type":  "Cash Receipt",
             "debit":       rcp["amount"],
             "credit":      0,
             "description": f"Payment received - {rcp['receipt_id']} via {rcp['payment_method']}",
             "source_doc":  rcp["receipt_id"],
             "customer_id": rcp["customer_id"],
+            "posted_by":   "System",
+            "notes":       None,
+        })
+        # Credit AR
+        entries.append({
+            "entry_id":    next_gl(),
+            "entry_date":  rcp["receipt_date"],
+            "period":      period,
+            "account_code":"1200",
+            "account_name":"Accounts Receivable",
+            "entry_type":  "Cash Receipt",
+            "debit":       0,
+            "credit":      rcp["amount"],
+            "description": f"AR applied - {rcp['receipt_id']}",
+            "source_doc":  rcp["receipt_id"],
+            "customer_id": rcp["customer_id"],
+            "posted_by":   "System",
+            "notes":       None,
+        })
+    return entries
+
+def gen_gl_credit_memos(memos):
+    """Double-entry: Debit 4000 Revenue + Credit 1200 AR per credit memo."""
+    entries = []
+    for cm in memos:
+        period = f"{cm['memo_date'][:7]}"
+        # Debit Revenue (reversal)
+        entries.append({
+            "entry_id":    next_gl(),
+            "entry_date":  cm["memo_date"],
+            "period":      period,
+            "account_code":"4000",
+            "account_name":"Product Revenue",
+            "entry_type":  "Credit Memo",
+            "debit":       cm["amount"],
+            "credit":      0,
+            "description": f"Credit memo {cm['memo_id']} - {cm['reason']}",
+            "source_doc":  cm["memo_id"],
+            "customer_id": cm["customer_id"],
+            "posted_by":   "System",
+            "notes":       None,
+        })
+        # Credit AR
+        entries.append({
+            "entry_id":    next_gl(),
+            "entry_date":  cm["memo_date"],
+            "period":      period,
+            "account_code":"1200",
+            "account_name":"Accounts Receivable",
+            "entry_type":  "Credit Memo",
+            "debit":       0,
+            "credit":      cm["amount"],
+            "description": f"AR credit - {cm['memo_id']}",
+            "source_doc":  cm["memo_id"],
+            "customer_id": cm["customer_id"],
             "posted_by":   "System",
             "notes":       None,
         })
@@ -434,22 +512,25 @@ def generate_year(year, base_invoices_per_month):
     all_gl_rcp = gen_gl_receipts(all_receipts)
     all_bank   = gen_bank_statements(all_receipts)
     all_memos  = gen_credit_memos(all_invoices)
+    all_gl_cm  = gen_gl_credit_memos(all_memos)
 
     total_inv = r2(sum(i["total_amount"] for i in all_invoices))
     total_rcp = r2(sum(r["amount"]       for r in all_receipts))
+    total_cm  = r2(sum(m["amount"]       for m in all_memos))
     print(f"\n  Total invoiced:  ${total_inv/1e6:.2f}M  ({len(all_invoices)} invoices)")
     print(f"  Total collected: ${total_rcp/1e6:.2f}M  ({len(all_receipts)} receipts)")
-    print(f"  Credit memos:    {len(all_memos)}")
+    print(f"  Credit memos:    {len(all_memos)}  (${total_cm/1e6:.3f}M)")
+    print(f"  GL entries:      {len(all_gl_inv) + len(all_gl_rcp) + len(all_gl_cm)}")
     print(f"  Bank lines:      {len(all_bank)}")
 
-    return all_invoices, all_receipts, all_gl_inv, all_gl_rcp, all_bank, all_memos
+    return all_invoices, all_receipts, all_gl_inv, all_gl_rcp, all_gl_cm, all_bank, all_memos
 
 def insert_year(data, label):
-    all_invoices, all_receipts, all_gl_inv, all_gl_rcp, all_bank, all_memos = data
+    all_invoices, all_receipts, all_gl_inv, all_gl_rcp, all_gl_cm, all_bank, all_memos = data
     print(f"\n-- Inserting {label} into Supabase --")
     insert_batch("invoices",       all_invoices)
     insert_batch("cash_receipts",  all_receipts)
-    insert_batch("gl_entries",     all_gl_inv + all_gl_rcp)
+    insert_batch("gl_entries",     all_gl_inv + all_gl_rcp + all_gl_cm)
     if all_memos: insert_batch("credit_memos",  all_memos)
     if all_bank:  insert_batch("bank_statements", all_bank)
 

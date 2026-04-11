@@ -2,10 +2,7 @@ export const fmtMoney = (n) => {
   if (n === null || n === undefined || n === '') return '—'
   const num = Number(n)
   if (Number.isNaN(num)) return '—'
-  return '$' + num.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
+  return '$' + Math.round(num).toLocaleString('en-US')
 }
 
 // Compact smart-rounded format: $20.27M, $536k, $1.2k, $842.50
@@ -19,7 +16,7 @@ export const fmtMoneyCompact = (n) => {
   if (abs >= 1_000_000)     return `${sign}$${(abs / 1_000_000).toFixed(1)}M`
   if (abs >= 10_000)        return `${sign}$${Math.round(abs / 1_000)}k`
   if (abs >= 1_000)         return `${sign}$${(abs / 1_000).toFixed(1)}k`
-  return `${sign}$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${sign}$${Math.round(abs).toLocaleString('en-US')}`
 }
 
 export const fmtNum = (n) => {
