@@ -89,6 +89,9 @@ export default function Invoices() {
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={11} className="empty">No invoices found.</td></tr>
+            )}
             {rows.map(r => (
               <tr key={r.invoice_id}>
                 <td>{r.invoice_id}</td>

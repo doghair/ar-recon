@@ -20,7 +20,11 @@ const QUARTER_RANGES = {
 }
 
 function presetRange(preset, year, today) {
-  if (preset === 'YTD') return [`${year}-01-01`, today]
+  if (preset === 'YTD') {
+    const currentYear = Number(today.slice(0, 4))
+    if (year < currentYear) return [`${year}-01-01`, `${year}-12-31`]
+    return [`${year}-01-01`, today]
+  }
   const [s, e] = QUARTER_RANGES[preset]
   return [`${year}-${s}`, `${year}-${e}`]
 }
@@ -109,6 +113,8 @@ function PeriodSelector({ preset, year, customFrom, customTo, availableYears, mi
             <input
               type="date"
               value={customFrom}
+              min={minDate}
+              max={customTo || maxDate}
               onChange={e => setCustom('customFrom', e.target.value)}
             />
           </label>
@@ -118,6 +124,8 @@ function PeriodSelector({ preset, year, customFrom, customTo, availableYears, mi
             <input
               type="date"
               value={customTo}
+              min={customFrom || minDate}
+              max={maxDate}
               onChange={e => setCustom('customTo', e.target.value)}
             />
           </label>

@@ -16,11 +16,11 @@ export default function Layout({ children }) {
 
       <div className={`sidebar-overlay${open ? ' open' : ''}`} onClick={close} />
 
-      <aside className={`sidebar${open ? ' open' : ''}`} style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1 }}>
+      <aside className={`sidebar${open ? ' open' : ''}`}>
+        <div className="sidebar-nav">
           <div className="sidebar-brand">
             <h1>AR RECON</h1>
-            <div className="sub">Biotech Co · Q1 2026</div>
+            <div className="sub">Biotech Co</div>
           </div>
           <nav>
             <NavLink to="/"                className={link} end           onClick={close}>Dashboard</NavLink>

@@ -63,6 +63,9 @@ export default function Receipts() {
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={10} className="empty">No receipts found.</td></tr>
+            )}
             {rows.map(r => (
               <tr key={r.receipt_id}>
                 <td>{r.receipt_id}</td>

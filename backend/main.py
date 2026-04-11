@@ -55,8 +55,8 @@ def health():
 @app.get("/api/dashboard")
 def dashboard():
     current          = tbl("v_reconciliation_current").select("*").execute().data
-    exception_counts = tbl("v_all_exceptions").select("category,amount").execute().data
-    aging            = tbl("v_ar_aging").select("aging_bucket,open_balance").execute().data
+    exception_counts = fetch_all(tbl("v_all_exceptions").select("category,amount"))
+    aging            = fetch_all(tbl("v_ar_aging").select("aging_bucket,open_balance"))
     period_summary   = tbl("v_reconciliation_summary").select("*").execute().data
     top_customers    = tbl("v_subledger_open_by_customer").select("*").limit(10).execute().data
 
@@ -260,7 +260,7 @@ def exceptions(category: Optional[str] = None):
     q = tbl("v_all_exceptions").select("*")
     if category:
         q = q.eq("category", category)
-    return q.order("category").execute().data
+    return fetch_all(q.order("category"))
 
 
 @app.get("/api/exceptions/detail")
@@ -268,7 +268,7 @@ def exception_detail(category: str = Query(...)):
     view = VIEW_MAP.get(category)
     if not view:
         raise HTTPException(404, f"Unknown category '{category}'")
-    return tbl(view).select("*").execute().data
+    return fetch_all(tbl(view).select("*"))
 
 
 # ── reconciliation items ──────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ def recon_items(category: Optional[str] = None, status: Optional[str] = None):
     q = tbl("reconciliation_items").select("*")
     if category: q = q.eq("category", category)
     if status:   q = q.eq("status", status)
-    return q.order("created_at", desc=True).execute().data
+    return fetch_all(q.order("created_at", desc=True))
 
 
 @app.post("/api/reconciliation/items/resolve")
@@ -318,15 +318,19 @@ def resolve_exception(req: ResolveRequest):
 # ── period lock ───────────────────────────────────────────────────────────────
 @app.get("/api/periods")
 def list_periods():
-    inv_periods = tbl("invoices").select("period").execute().data
+    inv_periods = fetch_all(tbl("invoices").select("period"))
+    seen = set()
     for row in inv_periods:
-        tbl("reconciliation_periods").upsert(
-            {"period": row["period"], "status": "Open"},
-            on_conflict="period").execute()
+        p = row["period"]
+        if p not in seen:
+            seen.add(p)
+            tbl("reconciliation_periods").upsert(
+                {"period": p, "status": "Open"},
+                on_conflict="period").execute()
 
-    periods     = tbl("reconciliation_periods").select("*").order("period").execute().data
-    gl_balances  = {r["period"]: r for r in tbl("v_gl_ar_balance_by_period").select("*").execute().data}
-    sub_balances = {r["period"]: r for r in tbl("v_subledger_balance_by_period").select("*").execute().data}
+    periods      = tbl("reconciliation_periods").select("*").order("period").execute().data
+    gl_balances  = {r["period"]: r for r in fetch_all(tbl("v_gl_ar_balance_by_period").select("*"))}
+    sub_balances = {r["period"]: r for r in fetch_all(tbl("v_subledger_balance_by_period").select("*"))}
     result = []
     for p in periods:
         gl  = gl_balances.get(p["period"], {})
@@ -398,12 +402,12 @@ def aging(customer_id: Optional[str] = None, bucket: Optional[str] = None):
     q = tbl("v_ar_aging").select("*")
     if customer_id: q = q.eq("customer_id", customer_id)
     if bucket:      q = q.eq("aging_bucket", bucket)
-    return q.order("days_past_due", desc=True).execute().data
+    return fetch_all(q.order("days_past_due", desc=True))
 
 
 @app.get("/api/aging/summary")
 def aging_summary():
-    rows = tbl("v_ar_aging").select("aging_bucket,open_balance").execute().data
+    rows = fetch_all(tbl("v_ar_aging").select("aging_bucket,open_balance"))
     from collections import defaultdict
     agg = defaultdict(lambda: {"count": 0, "total": 0.0})
     for r in rows:
@@ -418,12 +422,12 @@ def aging_summary():
 # ── customers ─────────────────────────────────────────────────────────────────
 @app.get("/api/customers")
 def customers():
-    return tbl("customers").select("*").order("customer_name").execute().data
+    return fetch_all(tbl("customers").select("*").order("customer_name"))
 
 
 @app.get("/api/customers/balances")
 def customer_balances():
-    return tbl("v_subledger_open_by_customer").select("*").execute().data
+    return fetch_all(tbl("v_subledger_open_by_customer").select("*"))
 
 
 @app.get("/api/customers/{customer_id}")

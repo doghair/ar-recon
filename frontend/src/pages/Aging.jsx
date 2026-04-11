@@ -24,7 +24,7 @@ export default function Aging() {
     <div className="page">
       <div className="page-header">
         <h1>AR Aging Report</h1>
-        <div className="muted">As of 2026-04-09</div>
+        <div className="muted">As of {new Date().toISOString().slice(0, 10)}</div>
       </div>
 
       {/* ── Bucket summary cards ───────────────────────────────────────── */}
@@ -84,6 +84,9 @@ export default function Aging() {
               </tr>
             </thead>
             <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={8} className="empty">No aging records found.</td></tr>
+              )}
               {rows.map(r => (
                 <tr key={r.invoice_id}>
                   <td>{r.invoice_id}</td>

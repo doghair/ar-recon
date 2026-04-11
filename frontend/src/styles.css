@@ -63,6 +63,17 @@ a:hover { text-decoration: underline; }
   color: #f0f5f3;
   padding: 24px 0;
   transition: background 0.2s;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
 }
 
 .sidebar-brand {

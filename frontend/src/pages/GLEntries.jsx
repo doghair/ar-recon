@@ -67,6 +67,9 @@ export default function GLEntries() {
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={10} className="empty">No GL entries found.</td></tr>
+            )}
             {rows.map(r => (
               <tr key={r.entry_id}>
                 <td>{r.entry_id}</td>

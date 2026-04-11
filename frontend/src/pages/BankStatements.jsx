@@ -52,6 +52,9 @@ export default function BankStatements() {
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={9} className="empty">No bank statements found.</td></tr>
+            )}
             {rows.map(r => (
               <tr key={r.line_id}>
                 <td>{r.line_id}</td>

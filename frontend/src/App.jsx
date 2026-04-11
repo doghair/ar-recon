@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Link } from 'react-router-dom'
 import Layout from './components/Layout.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Exceptions from './pages/Exceptions.jsx'
@@ -29,6 +29,13 @@ export default function App() {
         <Route path="/periods"         element={<Periods />} />
         <Route path="/compliance"      element={<Compliance />} />
         <Route path="/upload"          element={<Upload />} />
+        <Route path="*" element={
+          <div className="page">
+            <div className="page-header"><h1>Page Not Found</h1></div>
+            <p className="muted">The page you are looking for does not exist.</p>
+            <Link to="/">Back to Dashboard</Link>
+          </div>
+        } />
       </Routes>
     </Layout>
   )

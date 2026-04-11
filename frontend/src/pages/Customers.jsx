@@ -67,6 +67,9 @@ export default function Customers() {
             </tr>
           </thead>
           <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={8} className="empty">No customers found.</td></tr>
+            )}
             {filtered.map(c => (
               <tr key={c.customer_id}>
                 <td>
